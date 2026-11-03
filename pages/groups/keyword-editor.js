@@ -5,8 +5,8 @@ export function createKeywordEditor(root, rule, apiPost, isNew = false) {
     '<label><span>图文排列</span><select class="reply-send-mode"><option value="text_first">先发文字，再发图片</option><option value="combined">合并发送（由 QQ 排列）</option></select></label>' +
     '<p class="hint">先文字后图片：一张图片配文字会分成两条消息；多张图片依次发送。仅文字或仅图片不增加空消息。</p>' +
     '<label class="checkbox"><input class="reply-case" type="checkbox"><span>区分英文大小写</span></label>' +
-    '<label class="checkbox"><input class="reply-menu" type="checkbox"><span>在群菜单中显示（所有群成员可点击）</span></label>' +
-    '<p class="hint">群内 @机器人发送 #群菜单；按钮使用规则名称（1–10 字），正则规则暂不支持。</p>' +
+    '<label class="checkbox"><input class="reply-menu" type="checkbox"><span>在群菜单中显示</span></label>' +
+    '<p class="hint">群成员 @机器人发送 #群菜单 后，仅呼出者可以选择；菜单选中后或 60 秒未操作自动撤回，回复保留。按钮名称为 1–10 字，正则规则暂不支持。</p>' +
     '<p class="hint">每次随机选一套回复；每套可填文字、图片或图文，最多 3 张图片。正则第一组可用 {1} 引用。仅指令模式匹配唤醒后的第一个词。</p>' +
     '<div class="reply-options"></div><button class="text-button reply-add" type="button">添加一套随机回复</button>' +
     '<p class="reply-error" role="alert"></p>';

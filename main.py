@@ -5968,7 +5968,7 @@ class QQGroupAdmin(Star):
             event.stop_event()
         return result
 
-    async def _send_keyword_reply(self, client: Any, group_openid: str, reply: KeywordReply, *, message_id: str = "", event_id: str = "") -> bool:
+    async def _send_keyword_reply(self, client: Any, group_openid: str, reply: KeywordReply, *, message_id: str = "", event_id: str = "", recall_enabled: bool = True) -> bool:
         now = time.monotonic()
         previous_ready_at = self._keyword_reply_ready_at.get(group_openid, 0)
         if now < previous_ready_at:
@@ -6035,7 +6035,7 @@ class QQGroupAdmin(Star):
             self._keyword_reply_ready_at.pop(group_openid, None)
         recall = self._bounded_int(
             self._policy_value(policy, "keyword_reply_recall_seconds"), 0, 0, 120
-        )
+        ) if recall_enabled else 0
         for sent in sent_messages:
             sent_id = str(
                 (sent.get("id") if isinstance(sent, dict) else getattr(sent, "id", "")) or ""
@@ -6865,8 +6865,8 @@ class QQGroupAdmin(Star):
 
     @qq_group_command("群菜单")
     async def public_menu(self, event: AstrMessageEvent):
-        """发送所有群成员可点击的关键词回复菜单。"""
-        _, group_openid, _ = self._context(event)
+        """发送仅呼出者可操作的关键词回复菜单。"""
+        _, group_openid, member_openid = self._context(event)
         entry = self._group_config(group_openid)
         platform_id = str(event.get_platform_id())
         if not entry or str(entry.get("platform_id") or "") != platform_id:
@@ -6884,14 +6884,21 @@ class QQGroupAdmin(Star):
         while len(self._public_menu_tokens) >= 500:
             self._public_menu_tokens.pop(next(iter(self._public_menu_tokens)))
         token = secrets.token_urlsafe(12)
-        self._public_menu_tokens[token] = (time.monotonic() + 86400, group_openid, platform_id, [(source, index, digest) for source, index, digest, _ in rules])
+        choices = [(source, index, digest) for source, index, digest, _ in rules]
+        self._public_menu_tokens[token] = (time.monotonic() + 60, group_openid, platform_id, choices, member_openid, "", None, False)
         buttons = []
         for index, (_, _, _, rule) in enumerate(rules):
             label = rule["name"]
             buttons.append({"id": str(index), "render_data": {"label": label, "visited_label": label, "style": 1}, "action": {"type": 1, "permission": {"type": 2}, "data": f"qqgm:{token}:{index}", "unsupport_tips": "当前 QQ 版本不支持按钮"}})
         rows = [{"buttons": buttons[i:i + 2]} for i in range(0, len(buttons), 2)]
         try:
-            await self._send_group_markdown(self._client(event), group_openid, "请选择要查看的内容：\n菜单最长有效 24 小时，失效后请重新发送 #群菜单。", message_id=str(getattr(event.message_obj, "message_id", "") or ""), keyboard={"content": {"rows": rows}})
+            client = self._client(event)
+            sent = await self._send_group_markdown(client, group_openid, "请选择要查看的内容：\n仅呼出者可操作，选择后或 60 秒未选择时撤回菜单。", message_id=str(getattr(event.message_obj, "message_id", "") or ""), keyboard={"content": {"rows": rows}}, policy_auto_recall=False)
+            sent_id = str((sent.get("id") if isinstance(sent, dict) else getattr(sent, "id", "")) or "")
+            task = self._schedule_recall(client, group_openid, sent_id, 60, "群菜单") if sent_id else None
+            if not sent_id:
+                self.logger.warning("QQ 未返回群菜单消息 ID，无法自动撤回：group=%s", group_openid)
+            self._public_menu_tokens[token] = (time.monotonic() + 60, group_openid, platform_id, choices, member_openid, sent_id, task, True)
         except Exception:
             self._public_menu_tokens.pop(token, None)
             raise
@@ -6909,7 +6916,7 @@ class QQGroupAdmin(Star):
         data = self._public_menu_tokens.get(parts[1])
         rule = None
         try:
-            if data and data[1] == group_openid and event_id and clicker and self._platform_clients().get(data[2]) is client:
+            if data and data[7] and data[1] == group_openid and event_id and clicker == data[4] and self._platform_clients().get(data[2]) is client:
                 entry = self._group_config(group_openid)
                 index = int(parts[2])
                 if entry and str(entry.get("platform_id") or "") == data[2] and 0 <= index < len(data[3]):
@@ -6917,11 +6924,17 @@ class QQGroupAdmin(Star):
                     rule = next((item[3] for item in self._public_menu_rules(group_openid, entry) if item[:3] == selected), None)
         except (ValueError, TypeError):
             rule = None
+        if rule:
+            self._public_menu_tokens.pop(parts[1], None)
+            if data[6]:
+                data[6].cancel()
+            if data[5]:
+                self._schedule_recall(client, group_openid, data[5], 0, "群菜单")
         try:
-            await client.api.on_interaction_result(interaction_id, 0 if rule else 3)
+            await client.api.on_interaction_result(interaction_id, 0 if rule else 4 if data and clicker != data[4] else 3)
             if rule:
                 response = random.choice(rule.get("responses", [{"text": rule["reply"], "images": []}]))
-                await self._send_keyword_reply(client, group_openid, KeywordReply(response["text"], tuple(response["images"]), rule.get("send_mode", "combined")), event_id=event_id)
+                await self._send_keyword_reply(client, group_openid, KeywordReply(response["text"], tuple(response["images"]), rule.get("send_mode", "combined")), event_id=event_id, recall_enabled=False)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("处理群菜单按钮失败：group=%s error=%s", group_openid, exc)
         return True
@@ -7406,13 +7419,14 @@ class QQGroupAdmin(Star):
         message_id: str,
         delay: int,
         kind: str,
-    ) -> None:
+    ) -> asyncio.Task[None]:
         task = asyncio.create_task(
             self._recall_message(client, group_openid, message_id, delay, kind),
             name=f"qqgroup-admin-{kind}-recall",
         )
         self._recall_tasks.add(task)
         task.add_done_callback(self._recall_tasks.discard)
+        return task
 
     async def _recall_settings_message(
         self,

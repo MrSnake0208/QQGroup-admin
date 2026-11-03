@@ -7,7 +7,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from PIL import Image
 import test_main as fixtures
@@ -257,6 +257,23 @@ class KeywordFlowTest(unittest.IsolatedAsyncioTestCase):
         request.body.assert_not_awaited()
 
 class PublicMenuTest(KeywordFlowTest):
+    async def test_unused_menu_schedules_recall_and_expired_click_is_rejected(self):
+        self.rule['show_in_menu'] = True
+        self.plugin._platform_clients = lambda: {'platform-1': self.client}
+        with patch.object(self.plugin, '_recall_message', new_callable=AsyncMock) as recall:
+            self.assertEqual([value async for value in self.plugin.public_menu(self.event)], [])
+            card = self.client.api.messages.pop()
+            data = card['keyboard']['content']['rows'][0]['buttons'][0]['action']['data']
+            token = data.split(':')[1]
+            current = self.plugin._public_menu_tokens[token]
+            await current[6]
+            recall.assert_awaited_once_with(self.client, 'group-1', 'sent-1', 60, '群菜单')
+            self.plugin._public_menu_tokens[token] = (time.monotonic() - 1, *current[1:])
+            interaction = SimpleNamespace(id='ack', event_id='event', type=11, chat_type=1, group_openid='group-1', group_member_openid='admin-1', data=SimpleNamespace(resolved=SimpleNamespace(button_data=data)))
+            await self.plugin._handle_interaction(self.client, interaction)
+            self.assertEqual(self.client.api.acks[-1], ('ack', 3))
+            self.assertEqual(self.client.api.messages, [])
+
     async def test_public_click_sends_scoped_reply_using_interaction_event(self):
         self.rule.update(show_in_menu=True, send_mode='text_first')
         self.plugin.config['global_keyword_replies'] = [
@@ -264,15 +281,26 @@ class PublicMenuTest(KeywordFlowTest):
             {'name':'全局', 'keywords':'b', 'reply':'public', 'show_in_menu':True},
         ]
         self.plugin._platform_clients = lambda: {'platform-1': self.client}
+        self.plugin.config['keyword_reply_recall_seconds'] = 10
+        recall = MagicMock(return_value=MagicMock())
+        self.plugin._schedule_recall = recall
         result = [value async for value in self.plugin.public_menu(self.event)]
         self.assertEqual(result, [])
         card = self.client.api.messages.pop()
         buttons = [button for row in card['keyboard']['content']['rows'] for button in row['buttons']]
         self.assertEqual([b['render_data']['label'] for b in buttons], ['图文', '全局'])
         self.assertTrue(all(b['action']['permission']['type'] == 2 for b in buttons))
+        recall.assert_called_once_with(self.client, 'group-1', 'sent-1', 60, '群菜单')
         interaction = SimpleNamespace(id='ack', event_id='event', type=11, chat_type=1, group_openid='group-1', group_member_openid='ordinary-member', data=SimpleNamespace(resolved=SimpleNamespace(button_data=buttons[0]['action']['data'])))
+        await self.plugin._handle_interaction(self.client, interaction)
+        self.assertEqual(self.client.api.acks[-1], ('ack', 4))
+        self.assertEqual(self.client.api.messages, [])
+        interaction.group_member_openid = 'admin-1'
         with patch.object(module, 'QQGroupAPI', return_value=self.api):
             self.assertTrue(await self.plugin._handle_interaction(self.client, interaction))
+        recall.return_value.cancel.assert_called_once()
+        recall.assert_called_with(self.client, 'group-1', 'sent-1', 0, '群菜单')
+        self.assertEqual(recall.call_count, 2, 'menu replies must not be recalled')
         self.assertEqual(self.client.api.acks[-1], ('ack', 0))
         self.assertEqual([m['msg_type'] for m in self.client.api.messages], [0, 7, 7])
         self.assertTrue(all(m['event_id'] == 'event' and 'msg_id' not in m for m in self.client.api.messages))
