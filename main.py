@@ -480,10 +480,10 @@ def qq_admin_command(name: str):
     return decorator
 
 
-def qq_group_command(name: str):
+def qq_group_command(name: str, *, alias: set[str] | None = None):
     def decorator(handler):
         wrapped = guarded(handler)
-        wrapped = filter.command(name)(wrapped)
+        wrapped = filter.command(name, alias=alias)(wrapped)
         wrapped = filter.platform_adapter_type(QQ_PLATFORM_TYPES)(wrapped)
         return filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)(wrapped)
 
@@ -6879,7 +6879,7 @@ class QQGroupAdmin(Star):
                 result.append((source, index, digest, rule))
         return result
 
-    @qq_group_command("群菜单")
+    @qq_group_command("帮助中心", alias={"/帮助中心"})
     async def public_menu(self, event: AstrMessageEvent):
         """发送仅呼出者可操作的关键词回复菜单。"""
         _, group_openid, member_openid = self._context(event)
@@ -6890,10 +6890,10 @@ class QQGroupAdmin(Star):
             return
         rules = self._public_menu_rules(group_openid, entry)
         if not rules:
-            yield event.plain_result("群菜单还没有内容，请管理员在关键词规则中勾选显示。")
+            yield event.plain_result("帮助中心还没有内容，请管理员在关键词规则中勾选显示。")
             return
         if len(rules) > 10:
-            yield event.plain_result("群菜单最多显示 10 项，请管理员在后台调整。")
+            yield event.plain_result("帮助中心最多显示 10 项，请管理员在后台调整。")
             return
         self._cleanup_tokens()
         # shortcut: 旧菜单最多保留 500 份，超出时淘汰最早的菜单。
@@ -6909,7 +6909,7 @@ class QQGroupAdmin(Star):
         rows = [{"buttons": buttons[i:i + 2]} for i in range(0, len(buttons), 2)]
         try:
             client = self._client(event)
-            sent = await self._send_group_markdown(client, group_openid, "请选择要查看的内容：\n仅呼出者可操作，选择后或 60 秒未选择时撤回菜单。", message_id=str(getattr(event.message_obj, "message_id", "") or ""), keyboard={"content": {"rows": rows}}, policy_auto_recall=False)
+            sent = await self._send_group_markdown(client, group_openid, "YuanHub 帮助中心\n请选择需要的内容\n仅你可操作 · 选择后或 60 秒未操作时自动关闭", message_id=str(getattr(event.message_obj, "message_id", "") or ""), keyboard={"content": {"rows": rows}}, policy_auto_recall=False)
             sent_id = str((sent.get("id") if isinstance(sent, dict) else getattr(sent, "id", "")) or "")
             task = self._schedule_recall(client, group_openid, sent_id, 60, "群菜单") if sent_id else None
             if not sent_id:

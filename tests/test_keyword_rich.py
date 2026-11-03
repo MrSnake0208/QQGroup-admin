@@ -263,6 +263,7 @@ class PublicMenuTest(KeywordFlowTest):
         with patch.object(self.plugin, '_recall_message', new_callable=AsyncMock) as recall:
             self.assertEqual([value async for value in self.plugin.public_menu(self.event)], [])
             card = self.client.api.messages.pop()
+            self.assertEqual(card['markdown']['content'], 'YuanHub 帮助中心\n请选择需要的内容\n仅你可操作 · 选择后或 60 秒未操作时自动关闭')
             data = card['keyboard']['content']['rows'][0]['buttons'][0]['action']['data']
             token = data.split(':')[1]
             current = self.plugin._public_menu_tokens[token]
