@@ -5971,6 +5971,13 @@ class QQGroupAdmin(Star):
                 for image_id in reply.images:
                     data = await asyncio.to_thread(self.keyword_images().read, image_id)
                     media.append(await QQGroupAPI(client).upload_group_image(group_openid, data))
+                if reply.send_mode == "text_first" and reply.text:
+                    send_attempted = True
+                    sent_messages.append(await self._send_group_text(
+                        client, group_openid, reply.text, message_id=message_id,
+                        msg_seq=self._next_outbound_message_seq(),
+                        policy_auto_recall=False,
+                    ))
                 for index, image in enumerate(media):
                     payload = {
                         "group_openid": group_openid, "msg_type": 7,
@@ -5979,7 +5986,7 @@ class QQGroupAdmin(Star):
                     }
                     if message_id:
                         payload["msg_id"] = message_id
-                    if index == 0 and reply.text:
+                    if index == 0 and reply.text and reply.send_mode == "combined":
                         payload["content"] = reply.text
                     send_attempted = True
                     sent_messages.append(await client.api.post_group_message(**payload))
@@ -8079,7 +8086,7 @@ class QQGroupAdmin(Star):
                         raw.get("condition_logic") or raw.get("keyword_logic") or "any"
                     ),
                     "reply": str(raw.get("reply") or ""),
-                    **{key: copy.deepcopy(raw[key]) for key in ("responses", "trigger", "case_sensitive") if key in raw},
+                    **{key: copy.deepcopy(raw[key]) for key in ("responses", "trigger", "case_sensitive", "send_mode") if key in raw},
                     "match_type": str(raw.get("match_type") or "contains"),
                     "group_openids": groups if isinstance(groups, list) else [],
                     "enabled": bool(raw.get("enabled", True)),

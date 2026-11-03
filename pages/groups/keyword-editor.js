@@ -1,13 +1,17 @@
 // Shared by the global and per-group keyword forms.
-export function createKeywordEditor(root, rule, apiPost) {
+export function createKeywordEditor(root, rule, apiPost, isNew = false) {
   root.classList.add("keyword-rich-editor");
   root.innerHTML = '<label><span>触发方式</span><select class="reply-trigger"><option value="any">所有消息（沿用原规则）</option><option value="command">仅 @机器人或唤醒指令</option><option value="auto">仅普通群消息</option></select></label>' +
+    '<label><span>图文排列</span><select class="reply-send-mode"><option value="text_first">先发文字，再发图片</option><option value="combined">合并发送（由 QQ 排列）</option></select></label>' +
+    '<p class="hint">先文字后图片：一张图片配文字会分成两条消息；多张图片依次发送。仅文字或仅图片不增加空消息。</p>' +
     '<label class="checkbox"><input class="reply-case" type="checkbox"><span>区分英文大小写</span></label>' +
     '<p class="hint">每次随机选一套回复；每套可填文字、图片或图文，最多 3 张图片。正则第一组可用 {1} 引用。仅指令模式匹配唤醒后的第一个词。</p>' +
     '<div class="reply-options"></div><button class="text-button reply-add" type="button">添加一套随机回复</button>' +
     '<p class="reply-error" role="alert"></p>';
   const trigger = root.querySelector(".reply-trigger");
   trigger.value = rule.trigger || "any";
+  const sendMode = root.querySelector(".reply-send-mode");
+  sendMode.value = rule.send_mode || (isNew ? "text_first" : "combined");
   const caseSensitive = root.querySelector(".reply-case");
   caseSensitive.checked = rule.case_sensitive === true;
   const list = root.querySelector(".reply-options");
@@ -127,7 +131,7 @@ export function createKeywordEditor(root, rule, apiPost) {
         if (pending) throw new Error("图片正在上传，请完成后再保存");
         const responses = options.map(option => ({text: option.text.value.trim(), images: option.images.map(image => image.id)}));
         if (responses.some(response => !response.text && !response.images.length)) throw new Error("每套回复至少填写文字或添加一张图片");
-        const result = {reply: responses[0].text, trigger: trigger.value, case_sensitive: caseSensitive.checked};
+        const result = {reply: responses[0].text, trigger: trigger.value, case_sensitive: caseSensitive.checked, send_mode: sendMode.value};
         if (responses.length > 1 || responses[0].images.length) result.responses = responses;
         return result;
       } catch (exc) {

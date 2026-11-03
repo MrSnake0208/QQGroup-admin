@@ -153,6 +153,42 @@ class KeywordFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recall.call_count, 2)
         self.assertTrue(self.event.stopped)
 
+    async def test_text_first_order_sequence_and_recall(self):
+        self.rule['send_mode'] = 'text_first'
+        self.plugin.config['keyword_reply_recall_seconds'] = 10
+        with patch.object(self.plugin, '_schedule_recall') as recall:
+            self.assertTrue(await self.reply())
+        messages = self.client.api.messages
+        self.assertEqual([m['msg_type'] for m in messages], [0, 7, 7])
+        self.assertEqual(messages[0]['content'], '看这里')
+        self.assertTrue(all('content' not in m for m in messages[1:]))
+        self.assertEqual(len({m['msg_seq'] for m in messages}), 3)
+        self.assertTrue(all(m['msg_id'] == 'incoming' for m in messages))
+        self.assertEqual(recall.call_count, 3)
+
+    async def test_text_first_single_image_and_empty_text(self):
+        self.rule['send_mode'] = 'text_first'
+        self.rule['responses'][0]['images'] = self.ids[:1]
+        self.assertTrue(await self.reply())
+        self.assertEqual([m['msg_type'] for m in self.client.api.messages], [0, 7])
+        self.client.api.messages.clear()
+        self.rule['responses'][0]['text'] = ''
+        self.assertTrue(await self.reply())
+        self.assertEqual([m['msg_type'] for m in self.client.api.messages], [7])
+
+    async def test_text_first_stops_after_failed_text_and_recalls_partial(self):
+        self.rule['send_mode'] = 'text_first'
+        self.client.api.post_group_message = AsyncMock(side_effect=TimeoutError('uncertain'))
+        self.assertTrue(await self.reply())
+        self.assertEqual(self.client.api.post_group_message.await_count, 1)
+        self.assertTrue(self.event.stopped)
+        self.client.api.post_group_message = AsyncMock(side_effect=[{'id':'text'}, TimeoutError('image failed')])
+        self.plugin.config['keyword_reply_recall_seconds'] = 10
+        with patch.object(self.plugin, '_schedule_recall') as recall:
+            self.assertTrue(await self.reply())
+        recall.assert_called_once_with(self.client, 'group-1', 'text', 10, 'keyword-reply')
+        self.assertEqual(self.client.api.post_group_message.await_count, 2)
+
     async def test_image_only_reply(self):
         self.rule['responses'][0]['text'] = ''
         self.assertTrue(await self.reply())
@@ -188,14 +224,18 @@ class KeywordFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_global_and_group_roundtrip_validation(self):
         web = self.plugin._web
-        rules = web._global_keyword_replies([{**self.rule,'group_openids':['group-1'],'trigger':'auto','case_sensitive':True}], {'group-1'})
+        rules = web._global_keyword_replies([{**self.rule,'group_openids':['group-1'],'trigger':'auto','case_sensitive':True,'send_mode':'text_first'}], {'group-1'})
         await web._validate_keyword_images(rules)
         result = await self.plugin.web_save_global_keyword_replies({'rules': rules})
         self.assertEqual(result['rules'][0]['responses'], self.rule['responses'])
         self.assertEqual(result['rules'][0]['trigger'], 'auto')
         self.assertTrue(result['rules'][0]['case_sensitive'])
+        self.assertEqual(result['rules'][0]['send_mode'], 'text_first')
         group_rules = web._keyword_replies(result['rules'])
         self.assertEqual(group_rules[0]['responses'], self.rule['responses'])
+        self.assertEqual(group_rules[0]['send_mode'], 'text_first')
+        with self.assertRaises(ValueError):
+            web._keyword_replies([{**self.rule, 'send_mode':'invalid'}])
         missing = copy.deepcopy(rules)
         missing[0]['responses'][0]['images'] = ['c'*64+'.png']
         with self.assertRaises(LookupError):

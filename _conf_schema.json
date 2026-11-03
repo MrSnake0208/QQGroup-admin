@@ -824,6 +824,13 @@
             "options": ["any", "command", "auto"],
             "default": "any"
           },
+          "send_mode": {
+            "type": "string",
+            "description": "图文排列",
+            "options": ["combined", "text_first"],
+            "labels": ["合并发送（由 QQ 排列）", "先发文字，再发图片"],
+            "default": "combined"
+          },
           "case_sensitive": {
             "type": "bool",
             "description": "区分英文大小写",

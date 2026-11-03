@@ -19,6 +19,7 @@ TEXT_LIMIT = 1000
 class KeywordReply:
     text: str
     images: tuple[str, ...] = ()
+    send_mode: str = "combined"
 
 
 def normalize_rule(item: dict[str, Any]) -> dict[str, Any]:
@@ -37,6 +38,9 @@ def normalize_rule(item: dict[str, Any]) -> dict[str, Any]:
     trigger = item.get("trigger", "any")
     if trigger not in {"any", "command", "auto"}:
         raise ValueError("触发方式必须为 any、command 或 auto")
+    send_mode = item.get("send_mode", "combined")
+    if send_mode not in {"combined", "text_first"}:
+        raise ValueError("图文排列必须为 combined 或 text_first")
     sensitive = item.get("case_sensitive", False)
     enabled = item.get("enabled", True)
     if not isinstance(sensitive, bool) or not isinstance(enabled, bool):
@@ -71,6 +75,8 @@ def normalize_rule(item: dict[str, Any]) -> dict[str, Any]:
         "match_type": mode, "enabled": enabled,
         "reply": text(item.get("reply", ""), "回复内容", TEXT_LIMIT),
     }
+    if "send_mode" in item:
+        result["send_mode"] = send_mode
     if "trigger" in item:
         result["trigger"] = trigger
     if "case_sensitive" in item:
@@ -155,5 +161,5 @@ def keyword_reply_for_message(
                     content = re.sub(r"\{1\}|XX", lambda _: capture, content)
                 if len(content) > TEXT_LIMIT or (not content.strip() and not response["images"]):
                     continue
-                return KeywordReply(content, tuple(response["images"]))
+                return KeywordReply(content, tuple(response["images"]), rule.get("send_mode", "combined"))
     return None

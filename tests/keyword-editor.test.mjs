@@ -36,7 +36,7 @@ function choose(root, files) {
 const file = {name:'test.png', size:10, data:'data:image/png;base64,AA=='};
 {
   const {editor, root} = setup({reply:'旧文字'});
-  assert.deepEqual(editor.read(), {reply:'旧文字', trigger:'any', case_sensitive:false});
+  assert.deepEqual(editor.read(), {reply:'旧文字', trigger:'any', case_sensitive:false, send_mode:'combined'});
   root.querySelector('.reply-add').click();
   assert.throws(() => editor.read(), /至少/);
   assert.match(root.querySelector('[role=alert]').textContent, /至少/);
@@ -126,6 +126,7 @@ console.log('keyword editor: 4 scenarios passed (legacy/random, upload/pending/r
   doc.querySelector('#edit-form').dispatchEvent(new page.window.Event('submit'));
   assert.equal(posts[0].path, 'save');
   assert.equal(posts[0].body.keyword_replies[0].reply, '本群回复');
+  assert.equal(posts[0].body.keyword_replies[0].send_mode, 'text_first');
   await tick();
   doc.querySelector('#add-global-keyword-reply').click();
   const global = doc.querySelector('.global-keyword-row');
@@ -134,11 +135,15 @@ console.log('keyword editor: 4 scenarios passed (legacy/random, upload/pending/r
   global.querySelector('.global-rule-mode').value = 'regex';
   global.querySelector('.global-rule-mode').dispatchEvent(new page.window.Event('change'));
   assert.equal(global.querySelector('.global-rule-logic').disabled, true);
+  assert.equal(global.querySelector('.reply-send-mode').value, 'text_first');
+  global.querySelector('.reply-send-mode').value = 'combined';
   global.querySelector('.reply-text').value = '{1}好';
   doc.querySelector('#global-keyword-form').dispatchEvent(new page.window.Event('submit'));
   assert.equal(posts[1].path, 'global-keyword-replies/save');
   assert.equal(posts[1].body.rules[0].match_type, 'regex');
   assert.equal(posts[1].body.rules[0].reply, '{1}好');
+  assert.equal(posts[1].body.rules[0].send_mode, 'combined');
   await tick();
+  assert.equal(doc.querySelector('.global-keyword-row .reply-send-mode').value, 'combined');
   console.log('page integration: group/global form save and validation passed');
 }

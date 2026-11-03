@@ -639,7 +639,7 @@ import { createKeywordEditor } from "./keyword-editor.js";
     row.querySelector(".global-rule-keywords").value = Array.isArray(rule.keywords)
       ? rule.keywords.join("\n")
       : (rule.keywords || legacyKeyword);
-    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost);
+    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost, isNew);
     row.querySelector(".global-rule-mode").value = ["exact", "regex"].includes(rule.match_type) ? rule.match_type : "contains";
     row.querySelector(".global-rule-logic").value =
       rule.condition_logic === "all" || rule.keyword_logic === "all" || rule.logic === "all"
@@ -1630,7 +1630,7 @@ import { createKeywordEditor } from "./keyword-editor.js";
     row.querySelector(".keyword-reply-keywords").value = Array.isArray(rule.keywords)
       ? rule.keywords.join("\n")
       : (rule.keywords || legacyKeyword);
-    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost);
+    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost, isNew);
     row.querySelector(".keyword-reply-mode").value = ["exact", "regex"].includes(rule.match_type) ? rule.match_type : "contains";
     row.querySelector(".keyword-reply-logic").value =
       rule.condition_logic === "all" || rule.keyword_logic === "all" || rule.logic === "all"
