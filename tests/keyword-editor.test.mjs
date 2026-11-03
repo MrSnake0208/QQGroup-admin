@@ -36,7 +36,7 @@ function choose(root, files) {
 const file = {name:'test.png', size:10, data:'data:image/png;base64,AA=='};
 {
   const {editor, root} = setup({reply:'旧文字'});
-  assert.deepEqual(editor.read(), {reply:'旧文字', trigger:'any', case_sensitive:false, send_mode:'combined'});
+  assert.deepEqual(editor.read(), {reply:'旧文字', trigger:'any', case_sensitive:false, send_mode:'combined', show_in_menu:false});
   root.querySelector('.reply-add').click();
   assert.throws(() => editor.read(), /至少/);
   assert.match(root.querySelector('[role=alert]').textContent, /至少/);
@@ -123,10 +123,12 @@ console.log('keyword editor: 4 scenarios passed (legacy/random, upload/pending/r
   assert.equal(posts.length, 0, 'blank response must not save');
   assert.match(doc.querySelector('#toast').textContent, /至少/);
   local.querySelector('.reply-text').value = '本群回复';
+  local.querySelector('.reply-menu').checked = true;
   doc.querySelector('#edit-form').dispatchEvent(new page.window.Event('submit'));
   assert.equal(posts[0].path, 'save');
   assert.equal(posts[0].body.keyword_replies[0].reply, '本群回复');
   assert.equal(posts[0].body.keyword_replies[0].send_mode, 'text_first');
+  assert.equal(posts[0].body.keyword_replies[0].show_in_menu, true);
   await tick();
   doc.querySelector('#add-global-keyword-reply').click();
   const global = doc.querySelector('.global-keyword-row');
@@ -138,6 +140,11 @@ console.log('keyword editor: 4 scenarios passed (legacy/random, upload/pending/r
   assert.equal(global.querySelector('.reply-send-mode').value, 'text_first');
   global.querySelector('.reply-send-mode').value = 'combined';
   global.querySelector('.reply-text').value = '{1}好';
+  global.querySelector('.reply-menu').checked = true;
+  doc.querySelector('#global-keyword-form').dispatchEvent(new page.window.Event('submit'));
+  assert.equal(posts.length, 1);
+  assert.match(doc.querySelector('#toast').textContent, /正则/);
+  global.querySelector('.reply-menu').checked = false;
   doc.querySelector('#global-keyword-form').dispatchEvent(new page.window.Event('submit'));
   assert.equal(posts[1].path, 'global-keyword-replies/save');
   assert.equal(posts[1].body.rules[0].match_type, 'regex');

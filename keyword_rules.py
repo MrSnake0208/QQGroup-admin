@@ -45,6 +45,11 @@ def normalize_rule(item: dict[str, Any]) -> dict[str, Any]:
     enabled = item.get("enabled", True)
     if not isinstance(sensitive, bool) or not isinstance(enabled, bool):
         raise ValueError("启用和区分大小写必须是布尔值")
+    show_in_menu = item.get("show_in_menu", False)
+    if not isinstance(show_in_menu, bool):
+        raise ValueError("群菜单设置必须是布尔值")
+    if show_in_menu and (mode == "regex" or not str(item.get("name") or "").strip() or len(str(item.get("name") or "").strip()) > 10):
+        raise ValueError("群菜单仅支持名称为 1–10 字的非正则规则")
     raw = item.get("keywords", item.get("keyword", ""))
     if isinstance(raw, list):
         raw = "\n".join(text(k, "关键词", 256) for k in raw)
@@ -77,6 +82,8 @@ def normalize_rule(item: dict[str, Any]) -> dict[str, Any]:
     }
     if "send_mode" in item:
         result["send_mode"] = send_mode
+    if "show_in_menu" in item:
+        result["show_in_menu"] = show_in_menu
     if "trigger" in item:
         result["trigger"] = trigger
     if "case_sensitive" in item:

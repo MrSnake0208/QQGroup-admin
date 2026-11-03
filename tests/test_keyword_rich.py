@@ -255,3 +255,45 @@ class KeywordFlowTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(web_module, 'request', request), self.assertRaises(ValueError):
             await web.page_keyword_image_upload()
         request.body.assert_not_awaited()
+
+class PublicMenuTest(KeywordFlowTest):
+    async def test_public_click_sends_scoped_reply_using_interaction_event(self):
+        self.rule.update(show_in_menu=True, send_mode='text_first')
+        self.plugin.config['global_keyword_replies'] = [
+            {'name':'其他群', 'keywords':'a', 'reply':'secret', 'show_in_menu':True, 'group_openids':'another'},
+            {'name':'全局', 'keywords':'b', 'reply':'public', 'show_in_menu':True},
+        ]
+        self.plugin._platform_clients = lambda: {'platform-1': self.client}
+        result = [value async for value in self.plugin.public_menu(self.event)]
+        self.assertEqual(result, [])
+        card = self.client.api.messages.pop()
+        buttons = [button for row in card['keyboard']['content']['rows'] for button in row['buttons']]
+        self.assertEqual([b['render_data']['label'] for b in buttons], ['图文', '全局'])
+        self.assertTrue(all(b['action']['permission']['type'] == 2 for b in buttons))
+        interaction = SimpleNamespace(id='ack', event_id='event', type=11, chat_type=1, group_openid='group-1', group_member_openid='ordinary-member', data=SimpleNamespace(resolved=SimpleNamespace(button_data=buttons[0]['action']['data'])))
+        with patch.object(module, 'QQGroupAPI', return_value=self.api):
+            self.assertTrue(await self.plugin._handle_interaction(self.client, interaction))
+        self.assertEqual(self.client.api.acks[-1], ('ack', 0))
+        self.assertEqual([m['msg_type'] for m in self.client.api.messages], [0, 7, 7])
+        self.assertTrue(all(m['event_id'] == 'event' and 'msg_id' not in m for m in self.client.api.messages))
+        self.assertEqual(len({m['msg_seq'] for m in self.client.api.messages}), 3)
+        self.client.api.messages.clear()
+        self.rule['show_in_menu'] = False
+        await self.plugin._handle_interaction(self.client, interaction)
+        self.assertEqual(self.client.api.acks[-1], ('ack', 3))
+        self.assertEqual(self.client.api.messages, [])
+        self.rule['show_in_menu'] = True
+        interaction.group_openid = 'another'
+        await self.plugin._handle_interaction(self.client, interaction)
+        self.assertEqual(self.client.api.acks[-1], ('ack', 3))
+        self.assertEqual(self.client.api.messages, [])
+        interaction.group_openid = 'group-1'
+        interaction.event_id = ''
+        await self.plugin._handle_interaction(self.client, interaction)
+        self.assertEqual(self.client.api.acks[-1], ('ack', 3))
+        self.assertEqual(self.client.api.messages, [])
+
+    def test_public_rule_validation(self):
+        for invalid in ({'match_type':'regex'}, {'name':''}, {'name':'十一个字超过了菜单名称限制啦'}, {'show_in_menu':'yes'}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                normalize_rule({'name':'菜单', 'keywords':'帮助', 'reply':'回复', 'show_in_menu':True, **invalid})

@@ -831,6 +831,11 @@
             "labels": ["合并发送（由 QQ 排列）", "先发文字，再发图片"],
             "default": "combined"
           },
+          "show_in_menu": {
+            "type": "bool",
+            "description": "在群菜单中显示",
+            "default": false
+          },
           "case_sensitive": {
             "type": "bool",
             "description": "区分英文大小写",

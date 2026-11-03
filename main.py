@@ -4,6 +4,8 @@ import asyncio
 import base64
 import copy
 import json
+import hashlib
+import random
 import math
 import re
 import secrets
@@ -68,7 +70,7 @@ from .review import (
     verification_text,
 )
 from .web import GroupAdminWeb
-from .keyword_rules import keyword_reply_for_message
+from .keyword_rules import KeywordReply, keyword_reply_for_message, normalize_rule
 from .keyword_images import KeywordImages
 
 QQ_PLATFORM_TYPES = (
@@ -550,6 +552,7 @@ class QQGroupAdmin(Star):
         self._approval_tokens: dict[str, tuple[float, str, str, str]] = {}
         self._approval_contexts: dict[str, dict[str, Any]] = {}
         self._settings_tokens: dict[str, tuple[float, str, str, str]] = {}
+        self._public_menu_tokens: dict[str, tuple] = {}
         self._verification_tokens: dict[str, tuple[Any, ...]] = {}
         self._verification_recall_tasks: dict[str, asyncio.Task[None]] = {}
         # Serialize challenge creation so a join-poll event and the first
@@ -1504,6 +1507,7 @@ class QQGroupAdmin(Star):
         message_id: str = "",
         msg_seq: int | None = None,
         policy_auto_recall: bool = True,
+        event_id: str = "",
     ) -> Any:
         kwargs: dict[str, Any] = {
             "group_openid": group_openid,
@@ -1512,6 +1516,8 @@ class QQGroupAdmin(Star):
         }
         if message_id:
             kwargs["msg_id"] = message_id
+        elif event_id:
+            kwargs["event_id"] = event_id
         if msg_seq is not None:
             kwargs["msg_seq"] = int(msg_seq)
         sent = await client.api.post_group_message(**kwargs)
@@ -2944,6 +2950,7 @@ class QQGroupAdmin(Star):
             for token, request in self._approval_contexts.items()
             if token in self._approval_tokens
         }
+        self._public_menu_tokens = {token: data for token, data in self._public_menu_tokens.items() if data[0] > now}
         self._settings_tokens = {
             token: data
             for token, data in self._settings_tokens.items()
@@ -3068,6 +3075,8 @@ class QQGroupAdmin(Star):
         parts = button_data.split(":")
         group_openid = str(getattr(interaction, "group_openid", "") or "")
         prefix = parts[0] if parts else ""
+        if prefix == "qqgm":
+            return await self._handle_public_menu(client, interaction, parts)
         valid_action = (
             parts[2] in {"approve", "decline"}
             if prefix == "qqga" and len(parts) == 3
@@ -5942,18 +5951,27 @@ class QQGroupAdmin(Star):
             event.get_platform_id()
         ):
             return False
-        now = time.monotonic()
-        previous_ready_at = self._keyword_reply_ready_at.get(group_openid, 0)
-        if now < previous_ready_at:
-            return False
         reply = keyword_reply_for_message(
-            text,
-            group_openid,
-            (entry or {}).get("keyword_replies"),
+            text, group_openid, entry.get("keyword_replies"),
             self.config.get("global_keyword_replies"),
             is_command=bool(getattr(event, "is_at_or_wake_command", False)),
         )
         if reply is None:
+            return False
+        try:
+            client = self._client(event)
+        except Exception as exc:  # noqa: BLE001 - isolate platform failures
+            self.logger.warning("获取关键词回复客户端失败：group=%s error=%s", group_openid, exc)
+            return False
+        result = await self._send_keyword_reply(client, group_openid, reply, message_id=message_id)
+        if result and hasattr(event, "stop_event"):
+            event.stop_event()
+        return result
+
+    async def _send_keyword_reply(self, client: Any, group_openid: str, reply: KeywordReply, *, message_id: str = "", event_id: str = "") -> bool:
+        now = time.monotonic()
+        previous_ready_at = self._keyword_reply_ready_at.get(group_openid, 0)
+        if now < previous_ready_at:
             return False
         policy = self._global_policy_for_group(group_openid)
         cooldown = self._bounded_int(
@@ -5965,7 +5983,6 @@ class QQGroupAdmin(Star):
         sent_messages = []
         send_attempted = False
         try:
-            client = self._client(event)
             if reply.images:
                 media = []
                 for image_id in reply.images:
@@ -5976,7 +5993,7 @@ class QQGroupAdmin(Star):
                     sent_messages.append(await self._send_group_text(
                         client, group_openid, reply.text, message_id=message_id,
                         msg_seq=self._next_outbound_message_seq(),
-                        policy_auto_recall=False,
+                        policy_auto_recall=False, event_id=event_id,
                     ))
                 for index, image in enumerate(media):
                     payload = {
@@ -5986,6 +6003,8 @@ class QQGroupAdmin(Star):
                     }
                     if message_id:
                         payload["msg_id"] = message_id
+                    elif event_id:
+                        payload["event_id"] = event_id
                     if index == 0 and reply.text and reply.send_mode == "combined":
                         payload["content"] = reply.text
                     send_attempted = True
@@ -5994,7 +6013,8 @@ class QQGroupAdmin(Star):
                 send_attempted = True
                 sent_messages.append(await self._send_group_text(
                     client, group_openid, reply.text, message_id=message_id,
-                    policy_auto_recall=False,
+                    policy_auto_recall=False, event_id=event_id,
+                    msg_seq=self._next_outbound_message_seq() if event_id else None,
                 ))
         except Exception as exc:  # noqa: BLE001 - isolate QQ upload/send failures
             self.logger.warning(
@@ -6024,8 +6044,6 @@ class QQGroupAdmin(Star):
                 self._schedule_recall(client, group_openid, sent_id, recall, "keyword-reply")
             elif recall:
                 self.logger.warning("QQ 未返回关键词回复消息 ID，无法自动撤回：group=%s", group_openid)
-        if hasattr(event, "stop_event"):
-            event.stop_event()
         return True
 
     @filter.platform_adapter_type(QQ_PLATFORM_TYPES)
@@ -6822,6 +6840,91 @@ class QQGroupAdmin(Star):
         yield event.plain_result(
             f"已{action} QQ 原生群指令面板，共 {len(COMMAND_PANEL['items'])} 条命令。"
         )
+
+    def _public_menu_rules(self, group_openid: str, entry: dict[str, Any]) -> list[tuple[str, int, str, dict[str, Any]]]:
+        result = []
+        for source, items in (("group", entry.get("keyword_replies")), ("global", self.config.get("global_keyword_replies"))):
+            if not isinstance(items, list):
+                continue
+            for index, item in enumerate(items[:100]):
+                if not isinstance(item, dict) or not item.get("enabled", True) or item.get("show_in_menu") is not True:
+                    continue
+                if source == "global":
+                    targets = item.get("group_openids", [])
+                    if isinstance(targets, str):
+                        targets = re.split(r"[\s,，;；]+", targets.strip())
+                    if isinstance(targets, list) and any(targets) and "*" not in targets and group_openid not in targets:
+                        continue
+                try:
+                    rule = normalize_rule(item)
+                except (TypeError, ValueError):
+                    continue
+                digest = hashlib.sha256(json.dumps(item, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                result.append((source, index, digest, rule))
+        return result
+
+    @qq_group_command("群菜单")
+    async def public_menu(self, event: AstrMessageEvent):
+        """发送所有群成员可点击的关键词回复菜单。"""
+        _, group_openid, _ = self._context(event)
+        entry = self._group_config(group_openid)
+        platform_id = str(event.get_platform_id())
+        if not entry or str(entry.get("platform_id") or "") != platform_id:
+            yield event.plain_result("当前群尚未绑定群管理插件。")
+            return
+        rules = self._public_menu_rules(group_openid, entry)
+        if not rules:
+            yield event.plain_result("群菜单还没有内容，请管理员在关键词规则中勾选显示。")
+            return
+        if len(rules) > 10:
+            yield event.plain_result("群菜单最多显示 10 项，请管理员在后台调整。")
+            return
+        self._cleanup_tokens()
+        # shortcut: 旧菜单最多保留 500 份，超出时淘汰最早的菜单。
+        while len(self._public_menu_tokens) >= 500:
+            self._public_menu_tokens.pop(next(iter(self._public_menu_tokens)))
+        token = secrets.token_urlsafe(12)
+        self._public_menu_tokens[token] = (time.monotonic() + 86400, group_openid, platform_id, [(source, index, digest) for source, index, digest, _ in rules])
+        buttons = []
+        for index, (_, _, _, rule) in enumerate(rules):
+            label = rule["name"]
+            buttons.append({"id": str(index), "render_data": {"label": label, "visited_label": label, "style": 1}, "action": {"type": 1, "permission": {"type": 2}, "data": f"qqgm:{token}:{index}", "unsupport_tips": "当前 QQ 版本不支持按钮"}})
+        rows = [{"buttons": buttons[i:i + 2]} for i in range(0, len(buttons), 2)]
+        try:
+            await self._send_group_markdown(self._client(event), group_openid, "请选择要查看的内容：\n菜单最长有效 24 小时，失效后请重新发送 #群菜单。", message_id=str(getattr(event.message_obj, "message_id", "") or ""), keyboard={"content": {"rows": rows}})
+        except Exception:
+            self._public_menu_tokens.pop(token, None)
+            raise
+        if hasattr(event, "stop_event"):
+            event.stop_event()
+
+    async def _handle_public_menu(self, client: Any, interaction: Any, parts: list[str]) -> bool:
+        interaction_id = str(getattr(interaction, "id", "") or "")
+        if getattr(interaction, "type", None) != 11 or getattr(interaction, "chat_type", None) != 1 or not interaction_id or len(parts) != 3 or not parts[2].isdigit():
+            return False
+        self._cleanup_tokens()
+        group_openid = str(getattr(interaction, "group_openid", "") or "")
+        event_id = str(getattr(interaction, "event_id", "") or "")
+        clicker = str(getattr(interaction, "group_member_openid", "") or "")
+        data = self._public_menu_tokens.get(parts[1])
+        rule = None
+        try:
+            if data and data[1] == group_openid and event_id and clicker and self._platform_clients().get(data[2]) is client:
+                entry = self._group_config(group_openid)
+                index = int(parts[2])
+                if entry and str(entry.get("platform_id") or "") == data[2] and 0 <= index < len(data[3]):
+                    selected = data[3][index]
+                    rule = next((item[3] for item in self._public_menu_rules(group_openid, entry) if item[:3] == selected), None)
+        except (ValueError, TypeError):
+            rule = None
+        try:
+            await client.api.on_interaction_result(interaction_id, 0 if rule else 3)
+            if rule:
+                response = random.choice(rule.get("responses", [{"text": rule["reply"], "images": []}]))
+                await self._send_keyword_reply(client, group_openid, KeywordReply(response["text"], tuple(response["images"]), rule.get("send_mode", "combined")), event_id=event_id)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("处理群菜单按钮失败：group=%s error=%s", group_openid, exc)
+        return True
 
     @qq_group_command("审核设置")
     async def review_settings(self, event: AstrMessageEvent):
@@ -8086,7 +8189,7 @@ class QQGroupAdmin(Star):
                         raw.get("condition_logic") or raw.get("keyword_logic") or "any"
                     ),
                     "reply": str(raw.get("reply") or ""),
-                    **{key: copy.deepcopy(raw[key]) for key in ("responses", "trigger", "case_sensitive", "send_mode") if key in raw},
+                    **{key: copy.deepcopy(raw[key]) for key in ("responses", "trigger", "case_sensitive", "send_mode", "show_in_menu") if key in raw},
                     "match_type": str(raw.get("match_type") or "contains"),
                     "group_openids": groups if isinstance(groups, list) else [],
                     "enabled": bool(raw.get("enabled", True)),
