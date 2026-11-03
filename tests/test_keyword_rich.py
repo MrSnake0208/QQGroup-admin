@@ -303,6 +303,7 @@ class PublicMenuTest(KeywordFlowTest):
         self.assertEqual(recall.call_count, 2, 'menu replies must not be recalled')
         self.assertEqual(self.client.api.acks[-1], ('ack', 0))
         self.assertEqual([m['msg_type'] for m in self.client.api.messages], [0, 7, 7])
+        self.assertEqual(self.client.api.messages[0]['content'], '【YuanHub · 图文】\n看这里')
         self.assertTrue(all(m['event_id'] == 'event' and 'msg_id' not in m for m in self.client.api.messages))
         self.assertEqual(len({m['msg_seq'] for m in self.client.api.messages}), 3)
         self.client.api.messages.clear()
@@ -320,6 +321,25 @@ class PublicMenuTest(KeywordFlowTest):
         await self.plugin._handle_interaction(self.client, interaction)
         self.assertEqual(self.client.api.acks[-1], ('ack', 3))
         self.assertEqual(self.client.api.messages, [])
+
+    async def test_menu_header_before_text_and_images_without_truncation(self):
+        cases = [
+            (KeywordReply('链接'), [0], ['【YuanHub · 官网】\n链接']),
+            (KeywordReply('', (self.ids[0],), 'text_first'), [0, 7], ['【YuanHub · 官网】', None]),
+            (KeywordReply('配图', (self.ids[0],), 'combined'), [0, 7], ['【YuanHub · 官网】', '配图']),
+            (KeywordReply('长' * 1000, (self.ids[0],), 'text_first'), [0, 0, 7], ['【YuanHub · 官网】', '长' * 1000, None]),
+            (KeywordReply('长' * 1000), [0, 0], ['【YuanHub · 官网】', '长' * 1000]),
+        ]
+        for reply, types, contents in cases:
+            with self.subTest(reply=reply):
+                self.client.api.messages.clear()
+                with patch.object(module, 'QQGroupAPI', return_value=self.api):
+                    self.assertTrue(await self.plugin._send_keyword_reply(
+                        self.client, 'group-1', reply, event_id='event',
+                        recall_enabled=False, menu_title='官网'))
+                self.assertEqual([m['msg_type'] for m in self.client.api.messages], types)
+                self.assertEqual([m.get('content') for m in self.client.api.messages], contents)
+                self.assertEqual(len({m['msg_seq'] for m in self.client.api.messages}), len(types))
 
     def test_public_rule_validation(self):
         for invalid in ({'match_type':'regex'}, {'name':''}, {'name':'十一个字超过了菜单名称限制啦'}, {'show_in_menu':'yes'}):

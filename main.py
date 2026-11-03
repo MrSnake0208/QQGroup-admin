@@ -70,7 +70,7 @@ from .review import (
     verification_text,
 )
 from .web import GroupAdminWeb
-from .keyword_rules import KeywordReply, keyword_reply_for_message, normalize_rule
+from .keyword_rules import TEXT_LIMIT, KeywordReply, keyword_reply_for_message, normalize_rule
 from .keyword_images import KeywordImages
 
 QQ_PLATFORM_TYPES = (
@@ -5968,7 +5968,7 @@ class QQGroupAdmin(Star):
             event.stop_event()
         return result
 
-    async def _send_keyword_reply(self, client: Any, group_openid: str, reply: KeywordReply, *, message_id: str = "", event_id: str = "", recall_enabled: bool = True) -> bool:
+    async def _send_keyword_reply(self, client: Any, group_openid: str, reply: KeywordReply, *, message_id: str = "", event_id: str = "", recall_enabled: bool = True, menu_title: str = "") -> bool:
         now = time.monotonic()
         previous_ready_at = self._keyword_reply_ready_at.get(group_openid, 0)
         if now < previous_ready_at:
@@ -5982,16 +5982,32 @@ class QQGroupAdmin(Star):
             self._keyword_reply_ready_at[group_openid] = reservation
         sent_messages = []
         send_attempted = False
+        header = f"【YuanHub · {menu_title}】" if menu_title else ""
+        separate_header = bool(header and (
+            (reply.images and reply.send_mode == "combined")
+            or len(header) + 1 + len(reply.text) > TEXT_LIMIT
+        ))
+        content = reply.text
+        if header and not separate_header:
+            content = f"{header}\n{content}" if content else header
         try:
+            media = []
             if reply.images:
-                media = []
                 for image_id in reply.images:
                     data = await asyncio.to_thread(self.keyword_images().read, image_id)
                     media.append(await QQGroupAPI(client).upload_group_image(group_openid, data))
-                if reply.send_mode == "text_first" and reply.text:
+            if separate_header:
+                send_attempted = True
+                sent_messages.append(await self._send_group_text(
+                    client, group_openid, header, message_id=message_id,
+                    msg_seq=self._next_outbound_message_seq(),
+                    policy_auto_recall=False, event_id=event_id,
+                ))
+            if reply.images:
+                if reply.send_mode == "text_first" and content:
                     send_attempted = True
                     sent_messages.append(await self._send_group_text(
-                        client, group_openid, reply.text, message_id=message_id,
+                        client, group_openid, content, message_id=message_id,
                         msg_seq=self._next_outbound_message_seq(),
                         policy_auto_recall=False, event_id=event_id,
                     ))
@@ -6005,14 +6021,14 @@ class QQGroupAdmin(Star):
                         payload["msg_id"] = message_id
                     elif event_id:
                         payload["event_id"] = event_id
-                    if index == 0 and reply.text and reply.send_mode == "combined":
-                        payload["content"] = reply.text
+                    if index == 0 and content and reply.send_mode == "combined":
+                        payload["content"] = content
                     send_attempted = True
                     sent_messages.append(await client.api.post_group_message(**payload))
             else:
                 send_attempted = True
                 sent_messages.append(await self._send_group_text(
-                    client, group_openid, reply.text, message_id=message_id,
+                    client, group_openid, content, message_id=message_id,
                     policy_auto_recall=False, event_id=event_id,
                     msg_seq=self._next_outbound_message_seq() if event_id else None,
                 ))
@@ -6934,7 +6950,7 @@ class QQGroupAdmin(Star):
             await client.api.on_interaction_result(interaction_id, 0 if rule else 4 if data and clicker != data[4] else 3)
             if rule:
                 response = random.choice(rule.get("responses", [{"text": rule["reply"], "images": []}]))
-                await self._send_keyword_reply(client, group_openid, KeywordReply(response["text"], tuple(response["images"]), rule.get("send_mode", "combined")), event_id=event_id, recall_enabled=False)
+                await self._send_keyword_reply(client, group_openid, KeywordReply(response["text"], tuple(response["images"]), rule.get("send_mode", "combined")), event_id=event_id, recall_enabled=False, menu_title=rule["name"])
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("处理群菜单按钮失败：group=%s error=%s", group_openid, exc)
         return True
