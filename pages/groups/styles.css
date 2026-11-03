@@ -306,3 +306,14 @@ dialog::backdrop { background: rgba(21, 29, 40, .48); }
   th { color: #aeb8c4; background: #1b2128; }
   .text-button { color: #c3ccd7; }
 }
+
+/* Keyword images keep their space while authenticated previews load. */
+.keyword-rich-editor { display: grid; gap: 12px; min-width: 0; }
+.keyword-rich-editor .reply-options { display: grid; gap: 12px; }
+.keyword-rich-editor .reply-option { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border, #ccc); border-radius: 8px; }
+.keyword-rich-editor .reply-images { display: flex; flex-wrap: wrap; gap: 12px; }
+.keyword-rich-editor figure { margin: 0; display: grid; gap: 6px; max-width: 100%; }
+.keyword-rich-editor figure img { width: 140px; height: 110px; object-fit: contain; border: 1px solid var(--border, #ccc); border-radius: 6px; }
+.keyword-rich-editor input[type="file"] { max-width: 100%; }
+.keyword-rich-editor .reply-error { color: var(--danger, #c62828); margin: 0; }
+.keyword-rich-editor .reply-status, .keyword-rich-editor .hint { font-size: 13px; overflow-wrap: anywhere; }

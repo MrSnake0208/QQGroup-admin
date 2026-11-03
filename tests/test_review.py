@@ -1,8 +1,8 @@
+from keyword_rules import KeywordReply, keyword_reply_for_message
 import unittest
 
 from review import (
     BilibiliLookupError,
-    keyword_reply_for_message,
     matched_keyword,
     parse_bilibili_response,
     parse_bilibili_uid,
@@ -107,15 +107,15 @@ class ReviewRulesTest(unittest.TestCase):
             keyword_reply_for_message(
                 "Hello World", "group-1", group_rules, global_rules
             ),
-            "本群回复",
+            KeywordReply("本群回复"),
         )
         self.assertEqual(
             keyword_reply_for_message("hello there", "group-1", [], global_rules),
-            "所有群回复",
+            KeywordReply("所有群回复"),
         )
         self.assertEqual(
             keyword_reply_for_message("hello there", "group-2", [], global_rules),
-            "全局回复",
+            KeywordReply("全局回复"),
         )
         combined_rule = {
             "keywords": "hello\nworld",
@@ -128,7 +128,7 @@ class ReviewRulesTest(unittest.TestCase):
             keyword_reply_for_message(
                 "WORLD says hello", "group-1", [combined_rule], []
             ),
-            "组合回复",
+            KeywordReply("组合回复"),
         )
         self.assertIsNone(
             keyword_reply_for_message("hello only", "group-1", [combined_rule], [])
@@ -136,7 +136,7 @@ class ReviewRulesTest(unittest.TestCase):
         combined_rule["condition_logic"] = "any"
         self.assertEqual(
             keyword_reply_for_message("hello only", "group-1", [combined_rule], []),
-            "组合回复",
+            KeywordReply("组合回复"),
         )
 
     def test_bilibili_response_distinguishes_invalid_and_transient(self):

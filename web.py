@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import csv
+import json
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -14,6 +16,8 @@ from astrbot.api.web import error_response, json_response, request
 from .bilibili import parse_bilibili_uids
 from .qq_api import parse_qq_number_text
 from .review import parse_keywords
+from .keyword_rules import normalize_rule
+from .keyword_images import MAX_BASE64
 
 PLUGIN_NAME = "astrbot_plugin_qqgroup_admin"
 BATCH_GROUP_LIMIT = 100
@@ -192,6 +196,7 @@ class GroupAdminWeb:
     def __init__(self, plugin: Any, context: Context) -> None:
         self.plugin = plugin
         self.context = context
+        self._image_upload_slots = asyncio.Semaphore(2)
 
     @staticmethod
     def _provider_ids(value: Any) -> list[str]:
@@ -305,62 +310,8 @@ class GroupAdminWeb:
         for index, item in enumerate(value, 1):
             if not isinstance(item, dict):
                 raise TypeError(f"第 {index} 条关键词回复格式错误")
-            name = cls._text(
-                item.get("name"), f"第 {index} 条规则名称", 80, required=True
-            )
-            keywords = parse_keywords(
-                cls._text(
-                    item.get("keywords", item.get("keyword", "")),
-                    f"第 {index} 条关键词",
-                    2_100,
-                    required=True,
-                    multiline=True,
-                )
-            )
-            if not keywords:
-                raise ValueError(f"第 {index} 条关键词不能为空")
-            if len(keywords) > 20:
-                raise ValueError(f"第 {index} 条关键词最多 20 个")
-            reply = cls._text(
-                item.get("reply"),
-                f"第 {index} 条回复内容",
-                1_000,
-                required=True,
-                multiline=True,
-            )
-            match_type = cls._text(
-                item.get("match_type", "contains"), f"第 {index} 条匹配方式", 16
-            )
-            if match_type not in {"contains", "exact"}:
-                raise ValueError(f"第 {index} 条匹配方式只能是 contains 或 exact")
-            condition_logic = cls._text(
-                item.get(
-                    "condition_logic",
-                    item.get("keyword_logic", item.get("logic", "any")),
-                ),
-                f"第 {index} 条关键词组合",
-                8,
-            )
-            if condition_logic not in {"all", "any"}:
-                raise ValueError(f"第 {index} 条关键词组合只能是 all 或 any")
-            if match_type == "exact" and condition_logic == "all" and len(keywords) > 1:
-                raise ValueError(
-                    f"第 {index} 条完全匹配不能与多个关键词的全部满足组合使用"
-                )
-            enabled = item.get("enabled", True)
-            if not isinstance(enabled, bool):
-                raise TypeError(f"第 {index} 条启用状态必须是布尔值")
-            replies.append(
-                {
-                    "__template_key": "keyword_reply",
-                    "name": name,
-                    "keywords": "\n".join(keywords),
-                    "condition_logic": condition_logic,
-                    "reply": reply,
-                    "match_type": match_type,
-                    "enabled": enabled,
-                }
-            )
+            cls._text(item.get("name"), f"第 {index} 条规则名称", 80, required=True)
+            replies.append(normalize_rule(item))
         return replies
 
     @classmethod
@@ -444,51 +395,8 @@ class GroupAdminWeb:
         for index, item in enumerate(value, 1):
             if not isinstance(item, dict):
                 raise TypeError(f"第 {index} 条全局关键词回复格式错误")
-            name = cls._text(
-                item.get("name"), f"第 {index} 条规则名称", 80, required=True
-            )
-            keywords = parse_keywords(
-                cls._text(
-                    item.get("keywords", ""),
-                    f"第 {index} 条关键词",
-                    2_100,
-                    required=True,
-                    multiline=True,
-                )
-            )
-            if not keywords:
-                raise ValueError(f"第 {index} 条关键词不能为空")
-            if len(keywords) > 20:
-                raise ValueError(f"第 {index} 条关键词最多 20 个")
-            reply = cls._text(
-                item.get("reply"),
-                f"第 {index} 条回复内容",
-                1_000,
-                required=True,
-                multiline=True,
-            )
-            condition_logic = cls._text(
-                item.get(
-                    "condition_logic",
-                    item.get("keyword_logic", item.get("logic", "any")),
-                ),
-                f"第 {index} 条关键词组合",
-                8,
-            )
-            if condition_logic not in {"all", "any"}:
-                raise ValueError(f"第 {index} 条关键词组合只能是 all 或 any")
-            match_type = cls._text(
-                item.get("match_type", "contains"), f"第 {index} 条匹配方式", 16
-            )
-            if match_type not in {"contains", "exact"}:
-                raise ValueError(f"第 {index} 条匹配方式只能是 contains 或 exact")
-            if match_type == "exact" and condition_logic == "all" and len(keywords) > 1:
-                raise ValueError(
-                    f"第 {index} 条完全匹配不能与多个关键词的全部满足组合使用"
-                )
-            enabled = item.get("enabled", True)
-            if not isinstance(enabled, bool):
-                raise TypeError(f"第 {index} 条启用状态必须是布尔值")
+            cls._text(item.get("name"), f"第 {index} 条规则名称", 80, required=True)
+            rule = normalize_rule(item)
             raw_groups = item.get("group_openids", [])
             if not isinstance(raw_groups, list):
                 raise TypeError(f"第 {index} 条覆盖群必须是列表")
@@ -503,18 +411,8 @@ class GroupAdminWeb:
             unknown = set(group_openids) - allowed_group_openids
             if unknown:
                 raise ValueError(f"第 {index} 条包含未绑定群：{min(unknown)}")
-            replies.append(
-                {
-                    "__template_key": "keyword_reply",
-                    "name": name,
-                    "keywords": "\n".join(keywords),
-                    "condition_logic": condition_logic,
-                    "match_type": match_type,
-                    "reply": reply,
-                    "group_openids": "\n".join(group_openids),
-                    "enabled": enabled,
-                }
-            )
+            rule["group_openids"] = "\n".join(group_openids)
+            replies.append(rule)
         return replies
 
     @classmethod
@@ -1403,6 +1301,34 @@ class GroupAdminWeb:
             validated.append(self._validated_save(merged))
         return validated
 
+    async def _validate_keyword_images(self, rules: list[dict[str, Any]]) -> None:
+        ids = {image_id for rule in rules for response in rule.get("responses", [])
+               for image_id in response.get("images", [])}
+        for image_id in ids:
+            await asyncio.to_thread(self.plugin.keyword_images().read, image_id)
+
+    async def page_keyword_image_upload(self) -> Any:
+        limit = MAX_BASE64 + 1024
+        if int(request.headers.get("content-length", "0")) > limit:
+            raise ValueError("图片上传请求超过 8 MB 图片的编码上限")
+        async with self._image_upload_slots:
+            body = await request.body()
+            if len(body) > limit:
+                raise ValueError("图片上传请求过大")
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                raise TypeError("请求内容必须是 JSON 对象")
+            result = await asyncio.to_thread(self.plugin.keyword_images().upload, payload.get("base64"))
+        return self._response(result)
+
+    async def page_keyword_image_preview(self) -> Any:
+        payload = await self._payload()
+        if not isinstance(payload, dict):
+            raise TypeError("请求内容必须是 JSON 对象")
+        async with self._image_upload_slots:
+            result = await asyncio.to_thread(self.plugin.keyword_images().preview, payload.get("id"))
+        return self._response(result)
+
     async def _payload(self) -> Any:
         return await request.json(default=None)
 
@@ -1508,6 +1434,7 @@ class GroupAdminWeb:
                 120,
                 "关键词回复自动撤回",
             )
+        await self._validate_keyword_images(settings["rules"])
         return self._response(
             await self.plugin.web_save_global_keyword_replies(settings),
             message="全局关键词回复已保存",
@@ -1613,9 +1540,9 @@ class GroupAdminWeb:
         return self._response(await self.plugin.web_bilibili_login_poll(qrcode_key))
 
     async def page_save(self) -> Any:
-        result = await self.plugin.web_save_group(
-            self._validated_save(await self._payload())
-        )
+        payload = self._validated_save(await self._payload())
+        await self._validate_keyword_images(payload.get("keyword_replies", []))
+        result = await self.plugin.web_save_group(payload)
         return self._response(result, message="配置已保存")
 
     async def page_delete(self) -> Any:
@@ -1631,9 +1558,10 @@ class GroupAdminWeb:
         return self._response(result, message="配置已应用")
 
     async def page_batch_save(self) -> Any:
-        result = await self.plugin.web_batch_save(
-            await self._validated_batch_save(await self._payload())
-        )
+        payload = await self._validated_batch_save(await self._payload())
+        for group in payload:
+            await self._validate_keyword_images(group.get("keyword_replies", []))
+        result = await self.plugin.web_batch_save(payload)
         return self._response(result, message=f"已更新 {len(result)} 个群")
 
     async def page_batch_sync(self) -> Any:
@@ -1839,6 +1767,8 @@ class GroupAdminWeb:
 
     def register_routes(self) -> None:
         routes = (
+            ("/keyword-images/upload", self.page_keyword_image_upload, ["POST"], "上传关键词图片"),
+            ("/keyword-images/preview", self.page_keyword_image_preview, ["POST"], "预览关键词图片"),
             ("/overview", self.page_overview, ["GET"], "QQ群审核概览"),
             ("/list", self.page_list, ["GET"], "QQ群审核配置列表"),
             (

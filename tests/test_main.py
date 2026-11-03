@@ -1224,7 +1224,7 @@ class PluginFlowTest(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             )
-        with self.assertRaisesRegex(ValueError, "匹配方式只能是"):
+        with self.assertRaisesRegex(ValueError, "匹配方式必须为"):
             module.GroupAdminWeb._validated_save(
                 {
                     **payload,
@@ -1233,7 +1233,7 @@ class PluginFlowTest(unittest.IsolatedAsyncioTestCase):
                             "name": "错误规则",
                             "keywords": "帮助",
                             "reply": "回复",
-                            "match_type": "regex",
+                            "match_type": "invalid",
                         }
                     ],
                 }

@@ -812,6 +812,23 @@
             "hint": "逗号、分号或换行分隔，最多 20 个。",
             "default": ""
           },
+          "responses": {
+            "type": "list",
+            "description": "图文回复候选（请在插件页面编辑）",
+            "default": [],
+            "invisible": true
+          },
+          "trigger": {
+            "type": "string",
+            "description": "触发方式",
+            "options": ["any", "command", "auto"],
+            "default": "any"
+          },
+          "case_sensitive": {
+            "type": "bool",
+            "description": "区分英文大小写",
+            "default": false
+          },
           "reply": {
             "type": "text",
             "description": "回复内容",
@@ -821,8 +838,8 @@
             "type": "string",
             "description": "匹配方式",
             "default": "contains",
-            "options": ["contains", "exact"],
-            "labels": ["包含关键词", "完全匹配"]
+            "options": ["contains", "exact", "regex"],
+            "labels": ["包含关键词", "完全匹配", "正则表达式"]
           },
           "condition_logic": {
             "type": "string",

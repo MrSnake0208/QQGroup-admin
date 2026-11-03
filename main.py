@@ -62,13 +62,14 @@ from .qq_api import (
 from .review import (
     BilibiliLookupError,
     bilibili_uid_exists,
-    keyword_reply_for_message,
     matched_keyword,
     parse_keywords,
     parse_request_bilibili_uid,
     verification_text,
 )
 from .web import GroupAdminWeb
+from .keyword_rules import keyword_reply_for_message
+from .keyword_images import KeywordImages
 
 QQ_PLATFORM_TYPES = (
     filter.PlatformAdapterType.QQOFFICIAL
@@ -5920,6 +5921,15 @@ class QQGroupAdmin(Star):
         if not failed:
             self._moderation.remember(delivery_key, True)
 
+    def keyword_images(self) -> KeywordImages:
+        if not hasattr(self, "_keyword_images"):
+            from astrbot.api.star import StarTools
+
+            self._keyword_images = KeywordImages(
+                StarTools.get_data_dir("astrbot_plugin_qqgroup_admin") / "keyword_images"
+            )
+        return self._keyword_images
+
     async def _reply_to_keyword(
         self,
         event: AstrMessageEvent,
@@ -5941,6 +5951,7 @@ class QQGroupAdmin(Star):
             group_openid,
             (entry or {}).get("keyword_replies"),
             self.config.get("global_keyword_replies"),
+            is_command=bool(getattr(event, "is_at_or_wake_command", False)),
         )
         if reply is None:
             return False
@@ -5951,28 +5962,46 @@ class QQGroupAdmin(Star):
         reservation = time.monotonic() + cooldown
         if cooldown:
             self._keyword_reply_ready_at[group_openid] = reservation
+        sent_messages = []
+        send_attempted = False
         try:
             client = self._client(event)
-            sent = await self._send_group_text(
-                client,
-                group_openid,
-                reply,
-                message_id=message_id,
-                policy_auto_recall=False,
-            )
-        except Exception as exc:  # noqa: BLE001 - reply failures must not block chat
+            if reply.images:
+                media = []
+                for image_id in reply.images:
+                    data = await asyncio.to_thread(self.keyword_images().read, image_id)
+                    media.append(await QQGroupAPI(client).upload_group_image(group_openid, data))
+                for index, image in enumerate(media):
+                    payload = {
+                        "group_openid": group_openid, "msg_type": 7,
+                        "media": {"file_info": str(image["file_info"])},
+                        "msg_seq": self._next_outbound_message_seq(),
+                    }
+                    if message_id:
+                        payload["msg_id"] = message_id
+                    if index == 0 and reply.text:
+                        payload["content"] = reply.text
+                    send_attempted = True
+                    sent_messages.append(await client.api.post_group_message(**payload))
+            else:
+                send_attempted = True
+                sent_messages.append(await self._send_group_text(
+                    client, group_openid, reply.text, message_id=message_id,
+                    policy_auto_recall=False,
+                ))
+        except Exception as exc:  # noqa: BLE001 - isolate QQ upload/send failures
             self.logger.warning(
-                "发送关键词回复失败：group=%s error=%s", group_openid, exc
+                "发送关键词回复失败：group=%s 已发送=%s error=%s",
+                group_openid, len(sent_messages), exc,
             )
-            if (
-                cooldown
-                and self._keyword_reply_ready_at.get(group_openid) == reservation
-            ):
-                if previous_ready_at:
-                    self._keyword_reply_ready_at[group_openid] = previous_ready_at
-                else:
-                    self._keyword_reply_ready_at.pop(group_openid, None)
-            return False
+            if not send_attempted or not reply.images:
+                if cooldown and self._keyword_reply_ready_at.get(group_openid) == reservation:
+                    if previous_ready_at:
+                        self._keyword_reply_ready_at[group_openid] = previous_ready_at
+                    else:
+                        self._keyword_reply_ready_at.pop(group_openid, None)
+                return False
+            # A timed-out send may have succeeded remotely; don't fall through to AI.
         if cooldown:
             self._keyword_reply_ready_at[group_openid] = time.monotonic() + cooldown
         else:
@@ -5980,22 +6009,14 @@ class QQGroupAdmin(Star):
         recall = self._bounded_int(
             self._policy_value(policy, "keyword_reply_recall_seconds"), 0, 0, 120
         )
-        sent_id = str(
-            sent.get("id") if isinstance(sent, dict) else getattr(sent, "id", "") or ""
-        )
-        if recall and sent_id:
-            self._schedule_recall(
-                client,
-                group_openid,
-                sent_id,
-                recall,
-                "keyword-reply",
+        for sent in sent_messages:
+            sent_id = str(
+                (sent.get("id") if isinstance(sent, dict) else getattr(sent, "id", "")) or ""
             )
-        elif recall:
-            self.logger.warning(
-                "QQ 未返回关键词回复消息 ID，无法自动撤回：group=%s",
-                group_openid,
-            )
+            if recall and sent_id:
+                self._schedule_recall(client, group_openid, sent_id, recall, "keyword-reply")
+            elif recall:
+                self.logger.warning("QQ 未返回关键词回复消息 ID，无法自动撤回：group=%s", group_openid)
         if hasattr(event, "stop_event"):
             event.stop_event()
         return True
@@ -8058,6 +8079,7 @@ class QQGroupAdmin(Star):
                         raw.get("condition_logic") or raw.get("keyword_logic") or "any"
                     ),
                     "reply": str(raw.get("reply") or ""),
+                    **{key: copy.deepcopy(raw[key]) for key in ("responses", "trigger", "case_sensitive") if key in raw},
                     "match_type": str(raw.get("match_type") or "contains"),
                     "group_openids": groups if isinstance(groups, list) else [],
                     "enabled": bool(raw.get("enabled", True)),

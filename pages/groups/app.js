@@ -1,3 +1,4 @@
+import { createKeywordEditor } from "./keyword-editor.js";
 (function () {
   "use strict";
 
@@ -570,7 +571,8 @@
 
   function constrainKeywordLogic(mode, logic) {
     var all = logic.querySelector('option[value="all"]');
-    var exact = mode.value === "exact";
+    var exact = mode.value === "exact" || mode.value === "regex";
+    logic.disabled = mode.value === "regex";
     all.disabled = exact;
     if (exact && logic.value === "all") logic.value = "any";
   }
@@ -591,7 +593,7 @@
       summaryName.textContent = name.value.trim() || "未命名规则";
       summaryMatch.textContent = row.classList.contains("welcome-rule-row")
         ? "入群欢迎"
-        : (mode.value === "exact" ? "完全匹配" : "包含关键词");
+        : (mode.value === "regex" ? "正则表达式" : (mode.value === "exact" ? "完全匹配" : "包含关键词"));
       summaryState.textContent = enabled.checked ? "已启用" : "已停用";
       summaryState.classList.toggle("disabled", !enabled.checked);
     }
@@ -624,12 +626,12 @@
       '<summary class="keyword-rule-summary"><strong class="keyword-rule-summary-name"></strong><span class="keyword-rule-summary-meta"><span class="keyword-rule-summary-match"></span><span class="keyword-rule-summary-state"></span></span></summary>' +
       '<div class="keyword-rule-body global-keyword-body">' +
       '<label><span>规则名称</span><input class="global-rule-name" maxlength="80" required></label>' +
-      '<label><span>匹配方式</span><select class="global-rule-mode"><option value="contains">包含关键词</option><option value="exact">完全匹配</option></select></label>' +
+      '<label><span>匹配方式</span><select class="global-rule-mode"><option value="contains">包含关键词</option><option value="exact">完全匹配</option><option value="regex">正则表达式</option></select></label>' +
       '<label class="checkbox global-rule-enabled"><input type="checkbox"><span>启用</span></label>' +
       '<button class="text-button danger global-rule-remove" type="button">删除</button>' +
-      '<label class="wide"><span>关键词</span><textarea class="global-rule-keywords" maxlength="2100" rows="3" placeholder="每行一个关键词，最多 20 个" required></textarea></label>' +
+      '<label class="wide"><span>关键词</span><textarea class="global-rule-keywords" maxlength="2100" rows="3" placeholder="普通匹配：每行一个，最多 20 个；正则：只填写一个表达式" required></textarea></label>' +
       '<label><span>关键词组合</span><select class="global-rule-logic"><option value="any">任一满足（OR）</option><option value="all">全部满足（AND）</option></select></label>' +
-      '<label class="wide"><span>回复内容</span><textarea class="global-rule-content" maxlength="1000" rows="3" required></textarea></label>' +
+      '<div class="wide keyword-editor"></div>' +
       '</div>';
     rule = rule || {};
     var legacyKeyword = rule.keyword || "";
@@ -637,8 +639,8 @@
     row.querySelector(".global-rule-keywords").value = Array.isArray(rule.keywords)
       ? rule.keywords.join("\n")
       : (rule.keywords || legacyKeyword);
-    row.querySelector(".global-rule-content").value = rule.reply || "";
-    row.querySelector(".global-rule-mode").value = rule.match_type === "exact" ? "exact" : "contains";
+    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost);
+    row.querySelector(".global-rule-mode").value = ["exact", "regex"].includes(rule.match_type) ? rule.match_type : "contains";
     row.querySelector(".global-rule-logic").value =
       rule.condition_logic === "all" || rule.keyword_logic === "all" || rule.logic === "all"
         ? "all"
@@ -743,7 +745,7 @@
         name: row.querySelector(".global-rule-name").value,
         keywords: row.querySelector(".global-rule-keywords").value,
         condition_logic: row.querySelector(".global-rule-logic").value,
-        reply: row.querySelector(".global-rule-content").value,
+        ...row._replyEditor.read(),
         match_type: row.querySelector(".global-rule-mode").value,
         enabled: row.querySelector(".global-rule-enabled input").checked,
         group_openids: allGroups ? [] : groupOpenids
@@ -1615,12 +1617,12 @@
       '<summary class="keyword-rule-summary"><strong class="keyword-rule-summary-name"></strong><span class="keyword-rule-summary-meta"><span class="keyword-rule-summary-match"></span><span class="keyword-rule-summary-state"></span></span></summary>' +
       '<div class="keyword-rule-body keyword-reply-body">' +
       '<label><span>规则名称</span><input class="keyword-reply-name" maxlength="80" required></label>' +
-      '<label><span>匹配方式</span><select class="keyword-reply-mode"><option value="contains">包含关键词</option><option value="exact">完全匹配</option></select></label>' +
+      '<label><span>匹配方式</span><select class="keyword-reply-mode"><option value="contains">包含关键词</option><option value="exact">完全匹配</option><option value="regex">正则表达式</option></select></label>' +
       '<label class="checkbox keyword-reply-enabled"><input type="checkbox"><span>启用</span></label>' +
       '<button class="text-button danger keyword-reply-remove" type="button">删除</button>' +
-      '<label class="wide"><span>关键词</span><textarea class="keyword-reply-keywords" maxlength="2100" rows="3" placeholder="每行一个关键词，最多 20 个" required></textarea></label>' +
+      '<label class="wide"><span>关键词</span><textarea class="keyword-reply-keywords" maxlength="2100" rows="3" placeholder="普通匹配：每行一个，最多 20 个；正则：只填写一个表达式" required></textarea></label>' +
       '<label><span>关键词组合</span><select class="keyword-reply-logic"><option value="any">任一满足（OR）</option><option value="all">全部满足（AND）</option></select></label>' +
-      '<label class="wide"><span>回复内容</span><textarea class="keyword-reply-content" maxlength="1000" rows="2" required></textarea></label>' +
+      '<div class="wide keyword-editor"></div>' +
       '</div>';
     rule = rule || {};
     var legacyKeyword = rule.keyword || "";
@@ -1628,8 +1630,8 @@
     row.querySelector(".keyword-reply-keywords").value = Array.isArray(rule.keywords)
       ? rule.keywords.join("\n")
       : (rule.keywords || legacyKeyword);
-    row.querySelector(".keyword-reply-content").value = rule.reply || "";
-    row.querySelector(".keyword-reply-mode").value = rule.match_type === "exact" ? "exact" : "contains";
+    row._replyEditor = createKeywordEditor(row.querySelector(".keyword-editor"), rule, apiPost);
+    row.querySelector(".keyword-reply-mode").value = ["exact", "regex"].includes(rule.match_type) ? rule.match_type : "contains";
     row.querySelector(".keyword-reply-logic").value =
       rule.condition_logic === "all" || rule.keyword_logic === "all" || rule.logic === "all"
         ? "all"
@@ -1675,7 +1677,7 @@
         name: row.querySelector(".keyword-reply-name").value,
         keywords: row.querySelector(".keyword-reply-keywords").value,
         condition_logic: row.querySelector(".keyword-reply-logic").value,
-        reply: row.querySelector(".keyword-reply-content").value,
+        ...row._replyEditor.read(),
         match_type: row.querySelector(".keyword-reply-mode").value,
         enabled: row.querySelector(".keyword-reply-enabled input").checked
       };
@@ -1725,6 +1727,13 @@
   function save(event) {
     event.preventDefault();
     var button = element("save-button");
+    var keywordReplies;
+    try {
+      keywordReplies = readKeywordReplies();
+    } catch (error) {
+      toast(error.message, true);
+      return;
+    }
     var body = {
       group_openid: editingGroup.group_openid,
       mode: element("mode").value,
@@ -1751,7 +1760,7 @@
       image_reject_keywords: element("image-reject-keywords").value,
       image_reject_reply: element("image-reject-reply").value,
       image_reject_at_member: element("image-reject-at").checked,
-      keyword_replies: readKeywordReplies(),
+      keyword_replies: keywordReplies,
       bilibili_uids: element("bilibili-uids").value,
       bilibili_dynamic_enabled: element("bilibili-dynamic-enabled").checked,
       bilibili_live_enabled: element("bilibili-live-enabled").checked
